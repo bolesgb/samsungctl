@@ -4,32 +4,37 @@ import logging
 import socket
 import time
 import ssl
-
+import os
 from . import exceptions
 
-URL_FORMAT = "wss://{}:{}/api/v2/channels/samsung.remote.control?name={}"
 
+URL_FORMAT = "ws://{}:{}/api/v2/channels/samsung.remote.control?name={}"
+SSL_URL_FORMAT = "wss://{}:{}/api/v2/channels/samsung.remote.control?name={}"
 
 class RemoteWebsocket():
     """Object for remote control connection."""
 
     def __init__(self, config):
-        self.token = ""
         import websocket
-
+        self.token_file = os.path.dirname(os.path.realpath(__file__)) + "/"+ config["name"] +"token.txt"
         if not config["port"]:
-            config["port"] = 8002
+            config["port"] = 8001
 
         if config["timeout"] == 0:
             config["timeout"] = None
 
-        url = URL_FORMAT.format(config["host"], config["port"],
-                                self._serialize_string(config["name"]))
-        if config["token"]:
-            url += "&token=" + config["token"]
+        if config["port"] == 8002:
+            url = SSL_URL_FORMAT.format(config["host"], config["port"],
+                                        self._serialize_string(config["name"]))
+            if os.path.isfile(self.token_file):
+                with open(self.token_file, "r") as token_file:
+                    url += "&token=" + token_file.readline()
+            self.connection = websocket.create_connection(url, config["timeout"], sslopt={"cert_reqs": ssl.CERT_NONE})
 
-        self.connection = websocket.create_connection(url, ssl_handshake_timeout=config["timeout"], sslopt={"cert_reqs": ssl.CERT_NONE})
-
+        else:
+            url = URL_FORMAT.format(config["host"], config["port"],
+                                    self._serialize_string(config["name"]))
+            self.connection = websocket.create_connection(url, config["timeout"])
         self._read_response()
 
     def __enter__(self):
@@ -70,13 +75,15 @@ class RemoteWebsocket():
         response = self.connection.recv()
         response = json.loads(response)
 
+        if 'data' in response and 'token' in response["data"]:
+            with open(self.token_file, "w") as token_file:
+                token_file.write(response['data']["token"])
+
         if response["event"] != "ms.channel.connect":
             self.close()
             raise exceptions.UnhandledResponse(response)
 
         logging.debug("Access granted.")
-        if response.get("token", False):
-            logging.info("Token: {}".format(response["token"]))
 
     @staticmethod
     def _serialize_string(string):
